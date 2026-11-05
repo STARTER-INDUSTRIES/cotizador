@@ -572,12 +572,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var c = n.cond || {};
     var body = '';
     var imgCache = {};
-    async function getImg(ref) {
+    async function getImg(ref, uso) {
       if (!ref) return null;
-      var key = ref.id || ref.src || '';
+      var key = (ref.id || ref.src || '') + (uso ? '|' + uso : '');
       if (imgCache[key] !== undefined) return imgCache[key];
       var r = null;
-      try { r = await env.loadImage(ref); } catch (e) { r = null; }
+      try { r = await env.loadImage(ref, uso); } catch (e) { r = null; }
       if (r && r.data) r.rid = media.add(r);
       imgCache[key] = r;
       return r;
@@ -623,8 +623,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       var topH = 0;
       if (env.coverLogo) {
         var rid = media.add(env.coverLogo);
-        var f = fit(env.coverLogo.w, env.coverLogo.h, 4300000, 1400000);
-        top += imgPara(rid, f.cx, f.cy, 160);
+        var f = fit(env.coverLogo.w, env.coverLogo.h, 3900000, 1200000);
+        top += imgPara(rid, f.cx, f.cy, 120);
         topH += Math.round(f.cy / EMU_PER_TWIP) + 260;
       }
       if (p.linea1) { top += P(p.linea1, { jc: 'center', before: 80, after: 0 }, { b: true, sz: 64, font: FONT_TITLE, color: '262626' }); topH += 900; }
@@ -639,9 +639,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       // 2) imagen: ocupa el espacio que queda
       var midH = Math.max(1800, COVER_H - topH - botH - 60);
       var mid = '';
-      var im = await getImg(p.imagen);
+      var im = await getImg(p.imagen, 'portada');
       if (im && im.rid) {
-        var g = fit(im.w, im.h, 5400000, (midH - 240) * EMU_PER_TWIP);
+        var g = fit(im.w, im.h, TEXT_W * EMU_PER_TWIP, (midH - 160) * EMU_PER_TWIP);
         mid = imgPara(im.rid, g.cx, g.cy, 0);
       } else mid = P('', {}, {});
       var cw = TEXT_W;
@@ -1178,7 +1178,62 @@ function revisar(n){
 function crearWord(n){
   return SD.build(n,{JSZip:window.JSZip, base:b64ToBytes(BASE_B64), outType:'blob',
     coverLogo:{data:b64ToBytes(COVER_LOGO), w:COVER_W, h:COVER_H, ext:'jpeg'},
-    loadImage:imageBytes});
+    loadImage:function(ref,uso){ return imageBytes(ref).then(function(im){ return (im && uso==='portada') ? prepararPortada(im) : im; }); }});
+}
+// Portada: recorta el blanco sobrante de la foto y agrega una sombra de piso muy tenue.
+// La imagen guardada no se modifica; esto solo se aplica al armar el Word.
+async function prepararPortada(im){
+  try{
+    var url=URL.createObjectURL(new Blob([im.data],{type:im.ext==='png'?'image/png':'image/jpeg'}));
+    var img=await new Promise(function(res,rej){ var i=new Image(); i.onload=function(){res(i);}; i.onerror=rej; i.src=url; });
+    URL.revokeObjectURL(url);
+    var W=img.naturalWidth, H=img.naturalHeight;
+    var cv=document.createElement('canvas'); cv.width=W; cv.height=H;
+    var cx=cv.getContext('2d'); cx.fillStyle='#fff'; cx.fillRect(0,0,W,H); cx.drawImage(img,0,0);
+    var d=cx.getImageData(0,0,W,H).data;
+    var x0=W,y0=H,x1=-1,y1=-1;
+    for(var y=0;y<H;y+=1){ for(var x=0;x<W;x+=1){ var k=(y*W+x)*4; if(d[k]<238||d[k+1]<238||d[k+2]<238){ if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y; } } }
+    if(x1<0 || (x1-x0)<W*0.08 || (y1-y0)<H*0.08){ x0=0;y0=0;x1=W-1;y1=H-1; }
+    var cw=x1-x0+1, ch=y1-y0+1;
+    var padX=Math.round(cw*0.03), padT=Math.round(ch*0.02), shadowH=Math.round(ch*0.09);
+    var scale=Math.min(1, 1700/Math.max(cw+2*padX, ch+padT+shadowH));
+    var OW=Math.round((cw+2*padX)*scale), OH=Math.round((ch+padT+shadowH)*scale);
+    // máquina recortada y escalada
+    var mc=document.createElement('canvas'); mc.width=Math.max(1,Math.round(cw*scale)); mc.height=Math.max(1,Math.round(ch*scale));
+    var m=mc.getContext('2d'); m.drawImage(cv, x0, y0, cw, ch, 0, 0, mc.width, mc.height);
+    // fondo blanco conectado al borde -> transparente (las partes blancas de la máquina se conservan)
+    var md=m.getImageData(0,0,mc.width,mc.height), px=md.data, MW=mc.width, MH=mc.height;
+    var seen=new Uint8Array(MW*MH), stack=[];
+    function claro(i){ var k=i*4; return px[k]>=246 && px[k+1]>=246 && px[k+2]>=246; }
+    for(var xx=0;xx<MW;xx++){ stack.push(xx, (MH-1)*MW+xx); }
+    for(var yy=0;yy<MH;yy++){ stack.push(yy*MW, yy*MW+MW-1); }
+    while(stack.length){
+      var i=stack.pop(); if(seen[i]) continue; seen[i]=1;
+      if(!claro(i)) continue;
+      px[i*4+3]=0;
+      var X=i%MW, Y=(i-X)/MW;
+      if(X>0) stack.push(i-1); if(X<MW-1) stack.push(i+1); if(Y>0) stack.push(i-MW); if(Y<MH-1) stack.push(i+MW);
+    }
+    // borde suave: píxeles casi blancos junto al fondo quedan semitransparentes
+    for(var j=0;j<MW*MH;j++){
+      if(px[j*4+3]===0) continue;
+      var k=j*4, mn=Math.min(px[k],px[k+1],px[k+2]);
+      if(mn>=236){ var X2=j%MW, nb=(X2>0&&px[(j-1)*4+3]===0)||(X2<MW-1&&px[(j+1)*4+3]===0)||(j>=MW&&px[(j-MW)*4+3]===0)||(j<MW*(MH-1)&&px[(j+MW)*4+3]===0);
+        if(nb) px[k+3]=Math.round(255*(255-mn)/19); }
+    }
+    m.putImageData(md,0,0);
+    var out=document.createElement('canvas'); out.width=OW; out.height=OH;
+    var o=out.getContext('2d');
+    // sombra de piso: elipse difusa bajo la base de la máquina
+    var baseY=(padT+ch)*scale, rx=cw*scale*0.47, ry=Math.max(4, shadowH*scale*0.42), sx=OW/2;
+    o.save(); o.translate(sx, baseY+ry*0.15); o.scale(1, ry/rx);
+    var g=o.createRadialGradient(0,0,0,0,0,rx);
+    g.addColorStop(0,'rgba(0,0,0,0.20)'); g.addColorStop(0.55,'rgba(0,0,0,0.08)'); g.addColorStop(1,'rgba(0,0,0,0)');
+    o.fillStyle=g; o.beginPath(); o.arc(0,0,rx,0,Math.PI*2); o.fill(); o.restore();
+    o.drawImage(mc, Math.round(padX*scale), Math.round(padT*scale));
+    var blob=await new Promise(function(r){ out.toBlob(r,'image/png'); });
+    return {data:new Uint8Array(await blob.arrayBuffer()), w:OW, h:OH, ext:'png'};
+  }catch(e){ return im; }
 }
 function nombreWord(n){
   return (SD.codigo(n.num)+' '+[n.portada.linea1,n.portada.linea2].filter(Boolean).join(' ')).replace(/[\\\/:*?"<>|]+/g,' ').replace(/\s+/g,' ').trim();
