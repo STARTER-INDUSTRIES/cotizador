@@ -167,7 +167,7 @@ details.hist ol{margin:8px 0 0;padding-left:18px;font-size:12px;color:var(--ink-
 .cover .nota{font-size:11.5px;font-style:italic;font-weight:600;color:var(--ink-2);text-align:center;max-width:520px}
 
 /* imágenes */
-.drop{display:grid;place-items:center;gap:6px;border:1.5px dashed #BFC5B6;border-radius:8px;background:#FAFBF8;color:var(--ink-2);padding:18px;text-align:center;font-size:12.5px;cursor:pointer;min-height:120px;width:100%}
+.drop{display:grid;place-items:center;align-content:center;gap:6px;border:1.5px dashed #BFC5B6;border-radius:8px;background:#FAFBF8;color:var(--ink-2);padding:18px;text-align:center;font-size:12.5px;cursor:pointer;min-height:120px;width:100%}
 .drop:hover{border-color:var(--green);color:var(--green-ink)}
 .drop.big{min-height:220px;max-width:460px}
 .drop input{display:none}
@@ -291,6 +291,7 @@ table.et td.b input{font-weight:700}
   </div>
   <span class="spacer"></span>
   <span class="sync" id="sync" data-s="warn"><span class="dot"></span><span id="syncTxt">Conectando…</span></span>
+  <span id="cfgbox"></span>
   <span id="ghbox"></span>
   <span id="filebox"></span>
   <button class="btn ghost sm" id="btnExport" title="Descarga todas las cotizaciones en un archivo JSON (respaldo)">Descargar respaldo</button>
@@ -1373,6 +1374,7 @@ async function localInit(){
     setSync('warn','Sin guardado permanente');
   }
   $('#btnImport').hidden=false;
+  try{ await imgCfgInit(); }catch(e){}
   try{ await ghInit(); }catch(e){}
   if(!GH.cfg){ try{ await fileInit(); }catch(e){} }
   var f=sorted()[0]; if(f) select(f.id,true); else renderAll();
@@ -1382,6 +1384,80 @@ async function localInit(){
 /* ---------- archivo de datos (OneDrive / carpeta compartida) ---------- */
 var FSA = STANDALONE && typeof window.showSaveFilePicker==='function' && typeof window.showOpenFilePicker==='function';
 var FS = {handle:null, state:'none', lastMod:0, timer:null, writing:null, again:false};
+/* ---------- carpeta de imágenes (se abre siempre ahí) ---------- */
+var PICK = STANDALONE && typeof window.showOpenFilePicker==='function' && typeof window.showDirectoryPicker==='function';
+var IMGCFG = {dir:null, link:''};
+var IMG_TYPES=[{description:'Imágenes',accept:{'image/png':['.png'],'image/jpeg':['.jpg','.jpeg'],'image/webp':['.webp']}}];
+function imgDirHint(){
+  if(!PICK) return '';
+  return IMGCFG.dir ? '<span class="hint">Se abre en la carpeta <b>'+h(IMGCFG.dir.name)+'</b></span>' : '<span class="hint">Tip: en ⚙ Ajustes elige tu carpeta de imágenes para que se abra siempre ahí.</span>';
+}
+async function imgCfgInit(){
+  if(!IDB) return;
+  try{
+    var c=await idbDo('meta','readonly',function(st){ return st.get('imgCfg'); });
+    if(c){ IMGCFG.dir=c.dir||null; IMGCFG.link=c.link||''; }
+  }catch(e){}
+  renderCfgBox();
+}
+async function imgCfgSave(){
+  if(!IDB) return;
+  try{ await idbDo('meta','readwrite',function(st){ return st.put({dir:IMGCFG.dir, link:IMGCFG.link},'imgCfg'); }); }catch(e){}
+}
+async function elegirCarpetaImg(){
+  try{
+    var d=await window.showDirectoryPicker({id:'starter-imagenes', mode:'read'});
+    IMGCFG.dir=d; await imgCfgSave(); renderCfgBox(); if(S.cur) renderAll();
+    toast('Listo: las imágenes se buscarán en la carpeta '+d.name+'.');
+  }catch(e){ if(!(e&&e.name==='AbortError')) toast('No se pudo elegir la carpeta.', true); }
+}
+async function pickImages(multiple){
+  var opts={id:'starter-img', multiple:!!multiple, types:IMG_TYPES, excludeAcceptAllOption:false};
+  if(IMGCFG.dir) opts.startIn=IMGCFG.dir;
+  try{ var hs=await window.showOpenFilePicker(opts); }
+  catch(e){
+    if(e && e.name==='AbortError') return [];
+    // la carpeta guardada ya no existe: se abre sin ella
+    if(opts.startIn){ delete opts.startIn; try{ hs=await window.showOpenFilePicker(opts); }catch(e2){ return []; } }
+    else return [];
+  }
+  var out=[]; for(var i=0;i<hs.length;i++) out.push(await hs[i].getFile());
+  return out;
+}
+function renderCfgBox(){
+  var el=$('#cfgbox'); if(!el || !STANDALONE) return;
+  el.innerHTML='<details class="fb"><summary class="btn sm ghost" title="Ajustes de este computador">⚙ Ajustes</summary><div class="pop">'+
+    '<b>Carpeta de imágenes</b>'+
+    (PICK ? '<span>'+(IMGCFG.dir?'Al agregar imágenes se abre la carpeta <b>'+h(IMGCFG.dir.name)+'</b>.':'Elige la carpeta donde guardas las imágenes de las máquinas (por ejemplo, la carpeta IMAGENES de SharePoint sincronizada en tu computador).')+'</span>'+
+      '<button class="btn sm primary" data-cfg="dir">'+(IMGCFG.dir?'Cambiar carpeta':'Elegir carpeta')+'</button>'
+      : '<span>Este navegador no permite recordar una carpeta. Usa Microsoft Edge o Google Chrome.</span>')+
+    '<label style="margin-top:6px">Enlace de la carpeta en SharePoint <span class="hint">(opcional, queda solo en este computador)</span><input type="text" id="cfg-link" value="'+h(IMGCFG.link)+'" placeholder="https://…sharepoint.com/…"></label>'+
+    '<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn sm" data-cfg="savelink">Guardar enlace</button>'+(IMGCFG.link?'<a class="btn sm ghost" href="'+h(IMGCFG.link)+'" target="_blank" rel="noopener">Abrir en SharePoint ↗</a>':'')+'</div>'+
+    '</div></details>';
+}
+document.addEventListener('click',function(e){
+  var b=e.target.closest('[data-cfg]'); if(!b) return;
+  var a=b.dataset.cfg;
+  if(a==='dir'){ var d=b.closest('details'); if(d) d.open=false; elegirCarpetaImg(); }
+  if(a==='savelink'){
+    var v=($('#cfg-link').value||'').trim();
+    if(v && !/^https:\/\//i.test(v)){ toast('El enlace debe empezar por https://', true); return; }
+    IMGCFG.link=v; imgCfgSave(); renderCfgBox(); toast(v?'Enlace guardado en este computador.':'Enlace borrado.');
+  }
+});
+// al hacer clic para agregar imágenes, se usa el selector que recuerda la carpeta
+document.addEventListener('click',function(e){
+  if(!PICK) return;
+  var lab=e.target.closest('label'); if(!lab) return;
+  var inp=lab.querySelector('input[type=file][data-img], input[type=file][data-gal]'); if(!inp || inp.disabled) return;
+  if(!S.cur || S.cur.bloqueado) return;
+  e.preventDefault();
+  pickImages(!!inp.dataset.gal).then(function(files){
+    if(!files.length) return;
+    if(inp.dataset.gal) subirGaleria(files); else subirEn(inp.dataset.img, files[0]);
+  });
+}, true);
+
 var JSON_TYPES=[{description:'Datos del cotizador STARTER',accept:{'application/json':['.json']}}];
 async function fileInit(){
   if(!FSA || !IDB) return;
@@ -1723,7 +1799,7 @@ function imgSlot(path,big){
       '<div class="imgacts"><label class="btn sm">Cambiar<input type="file" accept="image/png,image/jpeg,image/webp" data-img="'+path+'" hidden></label>'+
       '<button class="btn sm ghost" data-act="imgdel" data-p="'+path+'">Quitar</button></div></div>';
   }
-  return '<label class="drop'+(big?' big':'')+'"><input type="file" accept="image/png,image/jpeg,image/webp" data-img="'+path+'"><b>Agregar imagen</b><span class="hint">PNG o JPG. Haz clic o arrastra el archivo aquí.</span></label>';
+  return '<label class="drop'+(big?' big':'')+'"><input type="file" accept="image/png,image/jpeg,image/webp" data-img="'+path+'"><b>Agregar imagen</b><span class="hint">PNG o JPG. Haz clic o arrastra el archivo aquí.</span>'+imgDirHint()+'</label>';
 }
 function rowBtns(list,i){
   return '<button class="icon" title="Subir" data-act="up" data-l="'+list+'" data-i="'+i+'">↑</button><button class="icon" title="Bajar" data-act="down" data-l="'+list+'" data-i="'+i+'">↓</button><button class="icon del" title="Eliminar" data-act="del" data-l="'+list+'" data-i="'+i+'">✕</button>';
@@ -1792,7 +1868,7 @@ SEC.galeria=function(){
   var l=S.cur.galeria||[];
   return '<h3 class="h-doc">Galería</h3><div class="gallery">'+l.map(function(g,i){
     return '<div class="gtile">'+(g.imagen?'<img alt="" data-imgid="'+g.imagen.id+'" src="'+h(imgURL(g.imagen))+'">':'')+F('galeria.'+i+'.pie',{ph:'Pie de foto',label:'Pie de foto'})+'<div>'+rowBtns('galeria',i)+'</div></div>';
-  }).join('')+'<label class="drop"><input type="file" accept="image/png,image/jpeg,image/webp" multiple data-gal="1"><b>+ Agregar fotos</b><span class="hint">Puedes elegir varias a la vez</span></label></div>';
+  }).join('')+'<label class="drop"><input type="file" accept="image/png,image/jpeg,image/webp" multiple data-gal="1"><b>+ Agregar fotos</b><span class="hint">Puedes elegir varias a la vez</span>'+imgDirHint()+'</label></div>';
 };
 SEC.inversion=function(){
   var n=S.cur, c=n.cond, m=c.moneda, conIva=SD.iva(c);
